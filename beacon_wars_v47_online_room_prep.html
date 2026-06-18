@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Beacon Wars v47 Online Room Prep</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="viewport"><div id="app">
+  <section id="menu" class="screen active">
+    <button id="menuStartHotspot" onclick="startLocalGameFlow()" aria-label="Start Game">START</button>
+    <button id="menuOnlineButton" onclick="openOnlineMatch()" aria-label="Online Match">ONLINE MATCH</button>
+  </section>
+
+  <section id="options" class="screen">
+    <div class="setup-card panel">
+      <div class="setup-title">OPTIONS</div>
+      <button class="pick active" id="soundToggle" onclick="toggleSetting('sound')">SOUND: ON</button>
+      <button class="pick active" id="musicToggle" onclick="toggleSetting('music')">MUSIC: ON</button>
+      <button class="btn" onclick="showScreen('menu')">BACK</button>
+    </div>
+  </section>
+
+  <section id="online" class="screen">
+    <div class="online-card panel">
+      <div class="setup-title">ONLINE MATCH</div>
+      <p class="online-intro">Create a room or join with a room code. Host chooses the color. The joining player takes the other color and gets first attack.</p>
+      <div class="online-grid">
+        <div class="room-box">
+          <h2>CREATE ROOM</h2>
+          <button class="btn" onclick="createOnlineRoom()">CREATE ROOM</button>
+          <div id="createdRoom" class="room-code-display">No room yet.</div>
+          <div id="hostColorPick" class="color-pick-box"></div>
+        </div>
+        <div class="room-box">
+          <h2>JOIN ROOM</h2>
+          <label for="roomCodeInput">ROOM CODE</label>
+          <input id="roomCodeInput" class="room-input" maxlength="6" placeholder="ABCD12" />
+          <button class="btn" onclick="joinOnlineRoom()">JOIN ROOM</button>
+          <p class="small-note">Firebase sync will replace the local room stub when credentials are added.</p>
+        </div>
+      </div>
+      <div id="onlineStatus" class="online-status">Ready for room setup.</div>
+      <div class="setup-actions two-actions">
+        <button class="btn" onclick="showScreen('menu')">MAIN MENU</button>
+        <button class="btn red" onclick="startLocalGameFlow()">LOCAL GAME</button>
+      </div>
+    </div>
+  </section>
+
+
+  <section id="help" class="screen">
+    <div class="help-card panel">
+      <h1>HELP ME</h1>
+      <p>This is the quick battle manual for Beacon Wars.</p>
+      <div class="help-grid">
+        <div class="help-box">
+          <h2>Mission Setup</h2>
+          <ul>
+            <li><b>Side:</b> choose Blue Academy or Red Academy. The CPU becomes the opposite color.</li>
+            <li><b>Commander:</b> changes your Fleet Commander art and command profile.</li>
+            <li><b>Commander Tactic:</b> choose Tactical Warp or Emergency Shield.</li>
+            <li><b>Battlefield:</b> Mars or Earth. Clicking a map loads that battle.</li>
+          </ul>
+        </div>
+        <div class="help-box">
+          <h2>Movement</h2>
+          <ul>
+            <li>Drag from a unit’s A/base to move.</li>
+            <li>Green circles are legal move spaces.</li>
+            <li>Click the A/base without dragging to inspect or activate powers.</li>
+            <li>Recon Runner moves in straight lines until blocked.</li>
+          </ul>
+        </div>
+        <div class="help-box combat-help-box">
+          <h2>Combat</h2>
+          <div class="help-rules">
+            <div class="help-rule">
+              <div class="rule-icons">
+                <img src="FC.png" alt="Higher-rank unit">
+                <span class="rule-vs">&gt;</span>
+                <img src="RR.png" alt="Lower-rank unit">
+              </div>
+              <div class="rule-text"><b>Higher number defeats lower number.</b></div>
+            </div>
+            <div class="help-rule">
+              <div class="rule-icons">
+                <img src="SC.png" alt="Equal-rank unit one">
+                <span class="rule-vs">=</span>
+                <img src="RED_SC.png" alt="Equal-rank unit two">
+              </div>
+              <div class="rule-text"><b>Equal ranks remove both units.</b></div>
+            </div>
+            <div class="help-rule">
+              <div class="rule-icons">
+                <img src="TE.png" alt="Tech Engineer">
+                <span class="rule-vs">vs</span>
+                <img src="M.png" alt="Shield Mine">
+              </div>
+              <div class="rule-text"><b>Tech Engineer</b> safely removes <b>Shield Mines</b>.</div>
+            </div>
+            <div class="help-rule">
+              <div class="rule-icons">
+                <img src="I.png" alt="Infiltrator">
+                <span class="rule-vs">vs</span>
+                <img src="FC.png" alt="Fleet Commander">
+              </div>
+              <div class="rule-text"><b>Infiltrator</b> only defeats <b>Fleet Commander</b> when attacking first.</div>
+            </div>
+            <div class="help-rule">
+              <div class="rule-icons">
+                <img src="B.png" alt="Beacon">
+                <span class="rule-vs">or</span>
+                <img src="FC.png" alt="Fleet Commander">
+              </div>
+              <div class="rule-text">Capture the <b>Beacon</b> or eliminate the <b>Fleet Commander</b> to win.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <button class="btn" style="margin-top:18px;width:180px" onclick="returnFromHelp()">BACK TO SETUP</button>
+    </div>
+  </section>
+
+  <section id="setup" class="screen">
+    <div class="setup-card panel">
+      <div class="setup-title">MISSION SETUP</div>
+      <div class="step">1. SIDE</div>
+      <div id="sideBox"></div>
+      <div class="step">2. COMMANDER</div>
+      <div id="commanderBox" class="commander-grid"></div>
+      <div class="step">3. COMMANDER TACTIC</div>
+      <div id="tacticBox"></div>
+      <div class="step">4. BATTLEFIELD</div>
+      <div id="battlefieldBox" class="battlefield-grid"></div>
+      <div class="setup-actions">
+        <button class="btn" onclick="startGame(setup.battlefield)">COMMENCE BATTLE</button>
+        <button class="btn" onclick="showHelp()">HELP ME</button>
+        <button class="btn red" onclick="showScreen('menu')">BACK</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="game" class="screen">
+    <div id="boardLayer"></div>
+    <img id="bottomOverlay" class="hudOverlay" src="BOTTOM_OVERLAY.png" alt="">
+    <img id="borderOverlay" class="hudOverlay" src="BORDER.png" alt="">
+    <img id="logo" src="LOGO_CROP.png" alt="Beacon Wars">
+    <div id="coordNumbers"></div>
+    <div id="pieces"></div>
+    <div id="markers"></div>
+    <div id="dots"></div>
+    <div id="confirmBox"><div id="confirmTitle">Confirm</div><div id="confirmText"></div><button id="confirmBtn" class="btn">CONFIRM</button><button id="cancelConfirmBtn" class="btn red">CANCEL</button></div>
+
+    <div id="leftPanel" class="panel">
+      <h2>YOUR UNITS</h2>
+      <div id="unitList"></div>
+    </div>
+
+    <div id="console" class="panel">
+      <h2>COMMAND CONSOLE</h2>
+      <div id="portrait"><img id="consoleImg" src="PROF_FC.jpg" alt=""></div>
+      <div id="consoleName">Select a unit</div>
+      <div id="consoleText">Unit name and ability display here.</div>
+      <div id="consoleUses"></div>
+      <div id="consoleActions" class="console-actions"></div>
+      <div id="capturedBox">
+        <div class="capTitle">CAPTURED UNITS</div>
+        <div id="capturedList">None</div>
+      </div>
+    </div>
+
+    <div id="calibration" class="panel">
+      <h3>CALIBRATION</h3>
+      <div class="calrow">
+        <button class="btn" onclick="toggleDots()">CENTER DOTS</button>
+        <button class="btn" onclick="toggleEnemies()">SHOW AI</button>
+      </div>
+      <div class="calrow">
+        <button class="btn" onclick="nudgeAnchor(0,-1)">ANCHOR UP</button>
+        <button class="btn" onclick="nudgeAnchor(0,1)">ANCHOR DOWN</button>
+      </div>
+      <div class="calrow">
+        <button class="btn" onclick="nudgeAnchor(-1,0)">ANCHOR LEFT</button>
+        <button class="btn" onclick="nudgeAnchor(1,0)">ANCHOR RIGHT</button>
+      </div>
+      <div id="readout"></div>
+    </div>
+
+    <div id="bottomPanels">
+      <div class="bottom panel">
+        <h3 id="phaseTitle">DEPLOYMENT PHASE</h3>
+        <div id="statusLine">Place your units.</div>
+        <div id="statusNote">Click a unit, then click a starting tile on the bottom 3 rows, or use RANDOM PLACE. In battle, drag a unit from its A/base to move.</div>
+      </div>
+      <div class="bottom panel">
+        <h3>CONTROL</h3>
+        <button id="primaryControlBtn" class="btn" disabled>START BATTLE</button>
+        <button id="secondaryControlBtn" class="btn">RANDOM PLACE</button>
+      </div>
+      <div class="bottom panel">
+        <h3>BATTLE LOG</h3>
+        <div id="battleLog"></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="modal" id="modal">
+    <div class="modal-card">
+      <h2 id="modalTitle">Message</h2>
+      <p id="modalText"></p>
+      <button class="btn" onclick="closeModal()">OK</button>
+    </div>
+  </div>
+</div></div>
+
+<script src="script.js"></script>
+</body>
+</html>
