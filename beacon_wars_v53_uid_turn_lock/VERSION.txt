@@ -1,0 +1,7 @@
+Beacon Wars v50 Commit Lock
+
+Fixes:
+- Adds COMMIT step after online moves.
+- Board locks during WAITING and COMMIT phases.
+- Cache-busts style.css, firebase-config.js, and script.js with ?v=50 so GitHub Pages stops serving old JavaScript.
+- Firebase turn handoff occurs only after pressing COMMIT.
