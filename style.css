@@ -1246,3 +1246,41 @@ body.scan-active .marker.sel{z-index:221 !important;width:70px !important;height
 }
 .side-lock b{color:var(--gold)}
 .side-lock .small-note{margin:7px 0 0}
+
+
+/* v50 online board lock + commit step */
+#boardLockOverlay{
+  position:absolute;
+  left:500px;
+  top:185px;
+  width:940px;
+  height:610px;
+  z-index:94;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  pointer-events:none;
+  background:rgba(0,8,18,.05);
+}
+#boardLockOverlay.show{
+  display:flex;
+  pointer-events:auto;
+}
+#boardLockText{
+  padding:12px 18px;
+  border:1px solid rgba(255,229,109,.75);
+  border-radius:14px;
+  background:rgba(0,12,24,.82);
+  color:var(--gold);
+  font-size:18px;
+  font-weight:900;
+  letter-spacing:1px;
+  text-transform:uppercase;
+  box-shadow:0 0 20px rgba(255,229,109,.18), inset 0 0 18px rgba(255,229,109,.06);
+}
+#primaryControlBtn{
+  min-width:92px;
+}
+#primaryControlBtn:not(:disabled){
+  box-shadow:0 0 12px rgba(83,240,255,.14);
+}

@@ -1,5 +1,5 @@
 /* =========================================================
-   BEACON WARS v47 CLEAN CODE MAP
+   BEACON WARS v50 CLEAN CODE MAP
    =========================================================
    1. CONFIG: board constants, art, units, tactics, battlefields
    2. SETUP UI: side, commander, tactic, battlefield cards
@@ -23,7 +23,12 @@ const onlineState={
   playerColor:null,
   opponentColor:null,
   firstAttackTeam:null,
-  firebaseReady:false
+  firebaseReady:false,
+  uid:null,
+  roomUnsub:null,
+  moveSeq:0,
+  firebaseError:null,
+  pendingCommit:false
 };
 let showCenterDots=false, showAllEnemies=false;
 
@@ -180,6 +185,7 @@ function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classL
 function toggleSetting(k){settings[k]=!settings[k];document.getElementById(k+'Toggle').textContent=k.toUpperCase()+': '+(settings[k]?'ON':'OFF')}
 
 function resetOnlineState(){
+  stopRoomListener();
   onlineState.enabled=false;
   onlineState.role='local';
   onlineState.roomCode=null;
@@ -187,15 +193,20 @@ function resetOnlineState(){
   onlineState.playerColor=null;
   onlineState.opponentColor=null;
   onlineState.firstAttackTeam=null;
+  onlineState.moveSeq=0;
+  onlineState.pendingCommit=false;
 }
 function startLocalGameFlow(){
   resetOnlineState();
   renderSides();
   showScreen('setup');
 }
-function openOnlineMatch(){
+async function openOnlineMatch(){
   renderOnlineRoom();
   showScreen('online');
+  setOnlineStatus('Connecting to Firebase...');
+  const ready=await initFirebase();
+  setOnlineStatus(ready ? 'Firebase connected. Create or join a room.' : 'Firebase not ready: '+(onlineState.firebaseError||'check config/rules'));
 }
 function generateRoomCode(){
   const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -206,6 +217,210 @@ function generateRoomCode(){
 function setOnlineStatus(msg){
   const el=document.getElementById('onlineStatus');
   if(el) el.innerHTML=msg;
+}
+
+let bwFirebaseApp=null;
+let bwFirebaseAuth=null;
+let bwFirestore=null;
+
+async function initFirebase(){
+  if(onlineState.firebaseReady && bwFirestore) return true;
+  if(typeof firebase==='undefined'){
+    onlineState.firebaseError='Firebase SDK not loaded.';
+    return false;
+  }
+  if(!window.firebaseConfig){
+    onlineState.firebaseError='firebase-config.js missing.';
+    return false;
+  }
+  try{
+    if(!firebase.apps.length) bwFirebaseApp=firebase.initializeApp(window.firebaseConfig);
+    else bwFirebaseApp=firebase.app();
+    bwFirebaseAuth=firebase.auth();
+    bwFirestore=firebase.firestore();
+
+    const cred=await bwFirebaseAuth.signInAnonymously();
+    onlineState.uid=cred.user.uid;
+    onlineState.firebaseReady=true;
+    onlineState.firebaseError=null;
+    return true;
+  }catch(err){
+    onlineState.firebaseReady=false;
+    onlineState.firebaseError=err.message||String(err);
+    console.error('Firebase init failed:', err);
+    return false;
+  }
+}
+function roomRef(code){
+  return bwFirestore.collection('rooms').doc(code);
+}
+function stopRoomListener(){
+  if(typeof onlineState.roomUnsub==='function'){
+    try{onlineState.roomUnsub();}catch(e){}
+  }
+  onlineState.roomUnsub=null;
+}
+async function firebaseCreateRoom(roomCode, hostColor){
+  const ready=await initFirebase();
+  if(!ready) throw new Error(onlineState.firebaseError||'Firebase unavailable.');
+  const guestColor=hostColor===BLUE?RED:BLUE;
+  await roomRef(roomCode).set({
+    roomCode,
+    hostUid:onlineState.uid,
+    guestUid:null,
+    hostColor,
+    guestColor,
+    firstAttackTeam:guestColor,
+    phase:'lobby',
+    turnRole:null,
+    turnTeam:null,
+    moveSeq:0,
+    createdAt:firebase.firestore.FieldValue.serverTimestamp(),
+    updatedAt:firebase.firestore.FieldValue.serverTimestamp()
+  }, {merge:true});
+  firebaseListenRoom(roomCode);
+}
+async function firebaseJoinRoom(roomCode){
+  const ready=await initFirebase();
+  if(!ready) throw new Error(onlineState.firebaseError||'Firebase unavailable.');
+  const snap=await roomRef(roomCode).get();
+  if(!snap.exists) throw new Error('Room not found.');
+  const data=snap.data()||{};
+  if(!data.hostColor) throw new Error('Host has not picked a color yet.');
+  if(data.guestUid && data.guestUid!==onlineState.uid) throw new Error('Room already has two players.');
+
+  const guestColor=data.hostColor===BLUE?RED:BLUE;
+  await roomRef(roomCode).set({
+    guestUid:onlineState.uid,
+    guestColor,
+    firstAttackTeam:guestColor,
+    updatedAt:firebase.firestore.FieldValue.serverTimestamp()
+  }, {merge:true});
+  firebaseListenRoom(roomCode);
+  return {...data, guestColor, firstAttackTeam:guestColor};
+}
+function firebaseListenRoom(roomCode){
+  if(!bwFirestore) return;
+  stopRoomListener();
+  onlineState.roomUnsub=roomRef(roomCode).onSnapshot(snap=>{
+    if(!snap.exists) return;
+    handleRoomSnapshot(snap.data()||{});
+  }, err=>{
+    console.error('Room listener error:', err);
+    if(onlineState.enabled) log('Firebase room listener error: '+(err.message||err));
+  });
+}
+function handleRoomSnapshot(data){
+  if(!onlineState.enabled) return;
+
+  if(data.moveSeq!=null) onlineState.moveSeq=data.moveSeq;
+  if(data.hostColor) onlineState.hostColor=data.hostColor;
+
+  if(onlineState.role==='host' && data.hostColor){
+    onlineState.playerColor=data.hostColor;
+    onlineState.opponentColor=data.guestColor || (data.hostColor===BLUE?RED:BLUE);
+    setup.side=onlineState.playerColor;
+  }
+  if(onlineState.role==='guest' && data.guestColor){
+    onlineState.playerColor=data.guestColor;
+    onlineState.opponentColor=data.hostColor;
+    setup.side=onlineState.playerColor;
+  }
+  if(data.firstAttackTeam) onlineState.firstAttackTeam=data.firstAttackTeam;
+
+  // Only turn-switch while the battle screen is active. Do not steal control during the local COMMIT step.
+  if(phase!=='player' && phase!=='waiting') return;
+  if(data.phase!=='battle') return;
+
+  const myTurn = data.turnRole===onlineState.role || data.turnTeam===playerTeam();
+  if(myTurn && phase==='waiting'){
+    phase='player';
+    selectedPiece=null; legal=[]; scanTargets=[]; scanMode=false; abilityMoveMode=false;
+    updateStatus(teamLabel(playerTeam())+' TURN','Opponent move received.','Your turn. Drag from a unit’s A/base to move.');
+    updateStartBtn();
+    renderBoard(); renderUnitList();
+    updateBoardLock();
+    log('Firebase turn passed to '+teamLabel(playerTeam())+'.');
+  } else if(!myTurn && phase==='player'){
+    phase='waiting';
+    updateStatus('ONLINE WAITING','Opponent turn.','Waiting for the opponent to make a move.');
+    updateStartBtn();
+    updateBoardLock();
+  }
+}
+async function firebaseStartBattle(){
+  if(!onlineState.enabled || !onlineState.roomCode) return;
+  const ready=await initFirebase();
+  if(!ready){ log('Firebase not ready: '+(onlineState.firebaseError||'unknown error')); return; }
+  const guestColor=onlineState.hostColor===BLUE?RED:BLUE;
+  await roomRef(onlineState.roomCode).set({
+    phase:'battle',
+    hostColor:onlineState.hostColor,
+    guestColor,
+    firstAttackTeam:guestColor,
+    turnRole:'guest',
+    turnTeam:guestColor,
+    updatedAt:firebase.firestore.FieldValue.serverTimestamp()
+  }, {merge:true});
+}
+async function firebaseSendTurn(){
+  if(!onlineState.enabled || !onlineState.roomCode || onlineState.role==='local') return;
+  const ready=await initFirebase();
+  if(!ready){ log('Firebase not ready: '+(onlineState.firebaseError||'unknown error')); return; }
+  const nextRole=onlineState.role==='host'?'guest':'host';
+  const nextTeam=onlineState.opponentColor || (playerTeam()===BLUE?RED:BLUE);
+  const payload={
+    phase:'battle',
+    turnRole:nextRole,
+    turnTeam:nextTeam,
+    moveSeq:firebase.firestore.FieldValue.increment(1),
+    lastMove:{
+      byRole:onlineState.role,
+      byTeam:playerTeam(),
+      toRole:nextRole,
+      toTeam:nextTeam,
+      at:firebase.firestore.FieldValue.serverTimestamp()
+    },
+    updatedAt:firebase.firestore.FieldValue.serverTimestamp()
+  };
+  await roomRef(onlineState.roomCode).set(payload, {merge:true});
+  await roomRef(onlineState.roomCode).collection('moves').add({
+    byRole:onlineState.role,
+    byTeam:playerTeam(),
+    nextRole,
+    nextTeam,
+    createdAt:firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+
+function updateBoardLock(){
+  const overlay=document.getElementById('boardLockOverlay');
+  const text=document.getElementById('boardLockText');
+  if(!overlay) return;
+  const locked = phase==='waiting' || phase==='commit';
+  overlay.classList.toggle('show', locked);
+  if(text){
+    if(phase==='commit') text.textContent='MOVE READY - PRESS COMMIT';
+    else if(phase==='waiting') text.textContent='WAITING FOR OPPONENT';
+    else text.textContent='BOARD LOCKED';
+  }
+}
+async function commitOnlineMove(){
+  if(!onlineState.enabled || phase!=='commit') return;
+  onlineState.pendingCommit=false;
+  phase='waiting';
+  updateStatus('ONLINE WAITING','Move committed.','Waiting for the opponent to respond.');
+  updateStartBtn();
+  try{
+    await firebaseSendTurn();
+    log('Move committed to Firebase.');
+  }catch(err){
+    log('Firebase commit failed: '+(err.message||err));
+    phase='commit';
+    onlineState.pendingCommit=true;
+    updateStatus('COMMIT FAILED','Firebase did not accept the move.','Check Firestore Rules, Anonymous Auth, then press COMMIT again.');
+    updateStartBtn();
+  }
 }
 function createOnlineRoom(){
   onlineState.enabled=true;
@@ -244,7 +459,7 @@ function saveLocalRoom(){
 function readLocalRoom(code){
   try{return JSON.parse(localStorage.getItem(ONLINE_STORAGE_PREFIX+code)||'null')}catch(e){return null}
 }
-function hostChooseColor(color){
+async function hostChooseColor(color){
   if(!onlineState.roomCode) createOnlineRoom();
   onlineState.enabled=true;
   onlineState.role='host';
@@ -254,30 +469,64 @@ function hostChooseColor(color){
   onlineState.firstAttackTeam=onlineState.opponentColor; // joining player attacks first
   setup.side=color;
   saveLocalRoom();
+
+  try{
+    setOnlineStatus('Creating Firebase room...');
+    await firebaseCreateRoom(onlineState.roomCode, color);
+    setOnlineStatus('Room '+onlineState.roomCode+' live. Share this code with Player 2.');
+  }catch(err){
+    setOnlineStatus('Firebase room create failed: '+(err.message||err));
+    log('Firebase create failed: '+(err.message||err));
+  }
+
   renderSides();
   showScreen('setup');
 }
-function joinOnlineRoom(){
+async function joinOnlineRoom(){
   const input=document.getElementById('roomCodeInput');
   const code=(input?input.value:'').trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
   if(!code){setOnlineStatus('Enter a room code to join.'); return;}
-  const room=readLocalRoom(code);
-  const hostColor=room&&room.hostColor?room.hostColor:BLUE;
-  const guestColor=hostColor===BLUE?RED:BLUE;
+
   onlineState.enabled=true;
   onlineState.role='guest';
   onlineState.roomCode=code;
-  onlineState.hostColor=hostColor;
-  onlineState.playerColor=guestColor;
-  onlineState.opponentColor=hostColor;
-  onlineState.firstAttackTeam=guestColor; // joining player attacks first
-  setup.side=guestColor;
-  renderSides();
-  showScreen('setup');
+
+  try{
+    setOnlineStatus('Joining Firebase room...');
+    const room=await firebaseJoinRoom(code);
+    const hostColor=room.hostColor||BLUE;
+    const guestColor=room.guestColor || (hostColor===BLUE?RED:BLUE);
+    onlineState.hostColor=hostColor;
+    onlineState.playerColor=guestColor;
+    onlineState.opponentColor=hostColor;
+    onlineState.firstAttackTeam=guestColor; // joining player attacks first
+    setup.side=guestColor;
+    setOnlineStatus('Joined room '+code+'. You are '+teamLabel(guestColor)+' and attack first.');
+    renderSides();
+    showScreen('setup');
+    return;
+  }catch(err){
+    setOnlineStatus('Firebase join failed: '+(err.message||err));
+    console.error(err);
+  }
+
+  // Local fallback for offline testing only.
+  const room=readLocalRoom(code);
+  if(room){
+    const hostColor=room.hostColor||BLUE;
+    const guestColor=hostColor===BLUE?RED:BLUE;
+    onlineState.hostColor=hostColor;
+    onlineState.playerColor=guestColor;
+    onlineState.opponentColor=hostColor;
+    onlineState.firstAttackTeam=guestColor;
+    setup.side=guestColor;
+    renderSides();
+    showScreen('setup');
+  }
 }
 function onlineSummary(){
   if(!onlineState.enabled) return '';
-  return `Room <b>${onlineState.roomCode||'LOCAL'}</b> · You are <b>${teamLabel(playerTeam())}</b> · Opponent is <b>${teamLabel(enemyTeam())}</b> · First attack: <b>${teamLabel(onlineState.firstAttackTeam||enemyTeam())}</b>`;
+  return `Room <b>${onlineState.roomCode||'LOCAL'}</b> · Role <b>${onlineState.role.toUpperCase()}</b> · You are <b>${teamLabel(playerTeam())}</b> · Opponent is <b>${teamLabel(enemyTeam())}</b> · First attack: <b>${teamLabel(onlineState.firstAttackTeam||enemyTeam())}</b>`;
 }
 
 // FIREBASE HOOKS TO WIRE NEXT:
@@ -451,12 +700,13 @@ function updateStartBtn(){
       selectedTray=null; selectedPiece=null; legal=[]; scanTargets=[]; scanMode=false;
       renderUnitList(); renderBoard();
       if(onlineState.enabled){
+        firebaseStartBattle();
         if((onlineState.firstAttackTeam||enemyTeam())===playerTeam()){
           phase='player';
-          updateStatus(teamLabel(playerTeam())+' TURN','Online battle started.','You are the joining/first-attack side. Make the opening move. Firebase sendMove goes here next.');
+          updateStatus(teamLabel(playerTeam())+' TURN','Online battle started.','You are the first-attack side. Make the opening move.');
         } else {
           phase='waiting';
-          updateStatus('ONLINE WAITING','Opponent attacks first.','Waiting for the joining player to make the first move. Firebase listener goes here next.');
+          updateStatus('ONLINE WAITING','Opponent attacks first.','Waiting for the joining player to make the first move.');
         }
       } else {
         phase='player';
@@ -467,6 +717,13 @@ function updateStartBtn(){
     secondary.textContent='RANDOM PLACE';
     secondary.className='btn';
     secondary.onclick=()=>randomPlaceBlue();
+  } else if(phase==='commit'){
+    primary.textContent='COMMIT';
+    primary.disabled=false;
+    primary.onclick=()=>commitOnlineMove();
+    secondary.textContent='MAIN MENU';
+    secondary.className='btn red';
+    secondary.onclick=()=>{phase='menu'; selectedPiece=null; selectedTray=null; legal=[]; scanTargets=[]; scanMode=false; abilityMoveMode=false; showScreen('menu');};
   } else {
     primary.textContent='RESTART';
     primary.disabled=false;
@@ -475,6 +732,7 @@ function updateStartBtn(){
     secondary.className='btn red';
     secondary.onclick=()=>{phase='menu'; selectedPiece=null; selectedTray=null; legal=[]; scanTargets=[]; scanMode=false; abilityMoveMode=false; showScreen('menu');};
   }
+  updateBoardLock();
 }
 
 function clearBlueDeployment(){
@@ -718,8 +976,10 @@ function finishPlayerTurn(){
   selectedPiece=null; legal=[]; scanMode=false; abilityMoveMode=false; scanTargets=[]; pendingConfirm=null; hideConfirm(); renderBoard(); renderUnitList();
   if(phase==='gameover') return;
   if(onlineState.enabled){
-    phase='waiting';
-    updateStatus('ONLINE WAITING','Opponent turn.','Firebase will send your move and listen for the opponent move here.');
+    phase='commit';
+    onlineState.pendingCommit=true;
+    updateStatus('COMMIT MOVE','Review your move.','Press COMMIT to send this move and pass the turn to the other player.');
+    log('Move ready. Press COMMIT to pass the turn.');
     updateStartBtn();
     return;
   }
@@ -901,6 +1161,10 @@ function startPiecePointer(e,piece){
 }
 
 function beginDrag(e,piece){
+  if(phase==='waiting' || phase==='commit'){
+    log('Board locked until this turn is active.');
+    return;
+  }
   if(phase!=='player' || piece.team!==playerTeam() || !piece.movable){
     pieceClick(piece);
     return;
