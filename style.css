@@ -1284,3 +1284,24 @@ body.scan-active .marker.sel{z-index:221 !important;width:70px !important;height
 #primaryControlBtn:not(:disabled){
   box-shadow:0 0 12px rgba(83,240,255,.14);
 }
+
+
+/* v57 last moved piece neon trail */
+.marker.lastmove{
+  width:76px;
+  height:76px;
+  border:3px solid rgba(83,255,140,.98);
+  background:radial-gradient(circle, rgba(83,255,140,.20) 0%, rgba(83,255,140,.08) 48%, rgba(83,255,140,.02) 72%);
+  box-shadow:
+    0 0 12px rgba(83,255,140,.95),
+    0 0 26px rgba(83,255,140,.72),
+    0 0 48px rgba(83,255,140,.42),
+    inset 0 0 18px rgba(83,255,140,.32);
+  pointer-events:none;
+  z-index:88;
+  animation:lastMovePulse 1.15s ease-in-out infinite alternate;
+}
+@keyframes lastMovePulse{
+  from{transform:translate(-50%,-50%) scale(.92); opacity:.78;}
+  to{transform:translate(-50%,-50%) scale(1.06); opacity:1;}
+}

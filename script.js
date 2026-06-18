@@ -1,5 +1,5 @@
 /* =========================================================
-   BEACON WARS v54 CLEAN CODE MAP
+   BEACON WARS v57 CLEAN CODE MAP
    =========================================================
    1. CONFIG: board constants, art, units, tactics, battlefields
    2. SETUP UI: side, commander, tactic, battlefield cards
@@ -177,6 +177,7 @@ let abilityMoveMode=false;
 let suppressNextBoardClick=false;
 let commanderUse={blue:1, red:1}, shieldArmed={blue:false, red:false};
 let captured={blue:[],red:[]};
+let lastMoveGlow=null;
 
 
 function fitApp(){
@@ -484,6 +485,18 @@ function moveTextFor(p,from,to,target){
   if(target) return `${teamLabel(p.team)} ${p.name} attacked at ${toText}.`;
   return `${teamLabel(p.team)} ${p.name} moved from ${fromText} to ${toText}.`;
 }
+function publicMoveText(from,to,target){
+  const fromText=(from.c+1)+','+(ROWS-from.r);
+  const toText=(to.c+1)+','+(ROWS-to.r);
+  if(target) return `Opponent unit attacked at ${toText}.`;
+  return `Opponent unit moved from ${fromText} to ${toText}.`;
+}
+function privateCommitText(){
+  return onlineState.pendingMove && onlineState.pendingMove.privateText ? onlineState.pendingMove.privateText : 'Move committed.';
+}
+function publicCommitText(){
+  return onlineState.pendingMove && onlineState.pendingMove.publicText ? onlineState.pendingMove.publicText : 'Opponent committed a move.';
+}
 function applyRemoteMovePayload(move){
   if(!move || !move.from || !move.to) return;
   // The other player sees the board rotated from our perspective.
@@ -496,13 +509,18 @@ function applyRemoteMovePayload(move){
       board[from.r][from.c]=null;
       p.r=to.r; p.c=to.c;
       board[to.r][to.c]=p;
+      lastMoveGlow={r:to.r,c:to.c};
       renderBoard();
-      log('Opponent move applied: '+(move.text||'unit moved.'));
+      log('Opponent move applied: '+(move.publicText||move.text||'Opponent unit moved.'));
     } else {
-      log('Opponent committed move: '+(move.text||'unit moved.')+' Could not auto-apply because the source square did not match.');
+      lastMoveGlow={r:to.r,c:to.c};
+      renderBoard();
+      log('Opponent committed move: '+(move.publicText||move.text||'Opponent unit moved.')+' Could not auto-apply because the source square did not match.');
     }
   } else {
-    log('Opponent committed combat: '+(move.text||'attack committed.'));
+    lastMoveGlow={r:to.r,c:to.c};
+    renderBoard();
+    log('Opponent committed combat: '+(move.publicText||move.text||'Opponent unit attacked.'));
   }
 }
 async function firebaseStartBattle(){
@@ -582,7 +600,7 @@ async function firebaseSendTurn(){
     lastCommitByRole:onlineState.role,
     lastCommitByTeam:playerTeam(),
     lastCommitByUid:onlineState.uid || null,
-    lastMoveText:(onlineState.pendingMove && onlineState.pendingMove.text) || 'Move committed.',
+    lastMoveText:publicCommitText(),
     lastMove:{
       commitId,
       byRole:onlineState.role,
@@ -591,8 +609,13 @@ async function firebaseSendTurn(){
       toRole:nextRole,
       toTeam:nextTeam,
       toUid:nextUid,
-      payload:onlineState.pendingMove || null,
-      text:(onlineState.pendingMove && onlineState.pendingMove.text) || 'Move committed.',
+      payload:onlineState.pendingMove ? {
+        type:onlineState.pendingMove.type,
+        from:onlineState.pendingMove.from,
+        to:onlineState.pendingMove.to,
+        publicText:onlineState.pendingMove.publicText
+      } : null,
+      text:publicCommitText(),
       at:firebase.firestore.FieldValue.serverTimestamp()
     },
     updatedAt:firebase.firestore.FieldValue.serverTimestamp()
@@ -609,8 +632,13 @@ async function firebaseSendTurn(){
       nextRole,
       nextTeam,
       nextUid,
-      payload:onlineState.pendingMove || null,
-      text:(onlineState.pendingMove && onlineState.pendingMove.text) || 'Move committed.',
+      payload:onlineState.pendingMove ? {
+        type:onlineState.pendingMove.type,
+        from:onlineState.pendingMove.from,
+        to:onlineState.pendingMove.to,
+        publicText:onlineState.pendingMove.publicText
+      } : null,
+      text:publicCommitText(),
       createdAt:firebase.firestore.FieldValue.serverTimestamp()
     });
   }catch(moveErr){
@@ -642,7 +670,7 @@ async function commitOnlineMove(){
   updateStartBtn();
   try{
     await firebaseSendTurn();
-    log('Move committed to Firebase. Turn passed to opponent.');
+    log('Move committed to Firebase. Hidden identity preserved for opponent. Turn passed.');
   }catch(err){
     const msg=err.message||String(err);
     console.error('Firebase commit failed:', err);
@@ -868,7 +896,7 @@ function initGame(){
   const boardLayer=document.getElementById('boardLayer');
   if(boardLayer) boardLayer.style.backgroundImage=`url("${bf.image}")`;
   board=Array.from({length:ROWS},()=>Array(COLS).fill(null));
-  phase='deploy';unitCounter=1;selectedTray=null;selectedPiece=null;legal=[];scanTargets=[];scanMode=false; abilityMoveMode=false;pendingConfirm=null;hideConfirm();
+  phase='deploy';unitCounter=1;selectedTray=null;selectedPiece=null;legal=[];scanTargets=[];scanMode=false; abilityMoveMode=false;pendingConfirm=null;lastMoveGlow=null;hideConfirm();
   commanderUse={blue:1,red:1};shieldArmed={blue:false,red:false};abilityMoveMode=false;captured={blue:[],red:[]};updateCaptured();
   placeAI();
   renderUnitList(); renderBoard(); clearLog(); updateConsole(null); updateStartBtn();
@@ -1064,6 +1092,7 @@ function renderBoard(){
     }
   }
 
+  if(lastMoveGlow){addMarker('lastmove',lastMoveGlow.r,lastMoveGlow.c)}
   if(selectedPiece){addMarker('sel',selectedPiece.r,selectedPiece.c)}
   legal.forEach(t=>addMarker('legal',t.r,t.c));
   scanTargets.forEach(t=>addMarker('scan',t.r,t.c));
@@ -1107,7 +1136,11 @@ function addMarker(type,r,c){
   m.className='marker '+type; 
   m.style.left=p.x+'px'; 
   m.style.top=p.y+'px'; 
-  m.onclick=e=>{e.stopPropagation(); cellClick(r,c)};
+  if(type==='lastmove'){
+    m.onclick=e=>{e.stopPropagation();};
+  } else {
+    m.onclick=e=>{e.stopPropagation(); cellClick(r,c)};
+  }
   document.getElementById('markers').appendChild(m);
 }
 
@@ -1118,6 +1151,7 @@ function cellClick(r,c){
     if(!PLAYER_DEPLOY_ROWS.includes(r) || !selectedTray || board[r][c] || remaining(selectedTray)<=0) return;
     const def=unitDefs.find(d=>d.id===selectedTray);
     board[r][c]=unitCopy(def,playerTeam(),r,c);
+    lastMoveGlow=null;
     updateConsole(board[r][c]); renderUnitList(); renderBoard(); updateStartBtn();
     return;
   }
@@ -1129,7 +1163,7 @@ function pieceClick(p){
   // Click means inspect / activate console skills.
   // Movement is handled by dragging from the A/base hotspot.
   if(phase==='deploy' && p.team===playerTeam()){
-    board[p.r][p.c]=null; renderUnitList(); renderBoard(); updateConsole(p); updateStartBtn(); return;
+    board[p.r][p.c]=null; lastMoveGlow=null; renderUnitList(); renderBoard(); updateConsole(p); updateStartBtn(); return;
   }
   if(p.team===playerTeam() || p.revealed || p.scanned || showAllEnemies) updateConsole(p);
   if(phase==='player' && p.team===playerTeam()){
@@ -1171,22 +1205,27 @@ function performAction(p,r,c){
   const target=board[r][c];
 
   if(!target){
-    const text=moveTextFor(p,from,to,null);
+    const privateText=moveTextFor(p,from,to,null);
+    const publicText=publicMoveText(from,to,null);
     board[p.r][p.c]=null; p.r=r; p.c=c; board[r][c]=p;
-    log(text);
+    lastMoveGlow={r,c};
+    log(privateText);
     if(onlineState.enabled){
-      onlineState.pendingMove={type:'move', pieceId:p.id, pieceName:p.name, from, to, text};
+      // Privacy rule: never send the moving unit's name/id in the room commit.
+      onlineState.pendingMove={type:'move', from, to, publicText, privateText};
     }
     finishPlayerTurn();
     return;
   }
 
   if(target.team!==p.team){
-    const text=moveTextFor(p,from,to,target);
-    const targetSnapshot={id:target.id, name:target.name, display:target.display, revealed:!!target.revealed, scanned:!!target.scanned};
+    const privateText=moveTextFor(p,from,to,target);
+    const publicText=publicMoveText(from,to,target);
     resolveCombat(p,target);
+    lastMoveGlow={r,c};
     if(onlineState.enabled){
-      onlineState.pendingMove={type:'attack', pieceId:p.id, pieceName:p.name, target:targetSnapshot, from, to, text};
+      // Combat replay is a later layer. For now, do not expose attacker/defender identity through commit text.
+      onlineState.pendingMove={type:'attack', from, to, publicText, privateText};
     }
     finishPlayerTurn();
   }

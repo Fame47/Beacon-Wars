@@ -82,3 +82,29 @@ Firestore room should now show:
 - lastMoveText
 - lastMove.payload
 - activeUid / turnUid
+
+
+# v56 Hidden Commit Identity
+
+Fix:
+- COMMIT no longer sends the moving unit name/id to the opponent.
+- Room document now stores public move text only, such as `Opponent unit moved from 5,3 to 5,4`.
+- Your own battle log still shows your real unit name.
+- Opponent battle log stays hidden unless combat reveal/scanning later exposes a unit.
+- `lastMove.payload` now carries only type/from/to/publicText.
+- Cache bust moved to `?v=56`.
+
+Known:
+- Deployment still stores unit details in Firestore for the prototype so the opponent board can mirror correctly, but the in-game UI keeps them hidden.
+- Full combat replay/reveal rules are the next layer.
+
+
+# v57 Green Last Move Glow
+
+Adds:
+- A green neon pulse around the last square a unit moved into.
+- Works for your own move immediately after movement.
+- Works for opponent commits using the public hidden move payload.
+- Does not reveal the unit name or ID.
+- Uses a generic marker over the destination cell, so hidden enemy pieces remain hidden as `?`.
+- Cache bust moved to `?v=57`.
