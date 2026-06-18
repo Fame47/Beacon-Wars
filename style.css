@@ -1255,7 +1255,7 @@ body.scan-active .marker.sel{z-index:221 !important;width:70px !important;height
   top:185px;
   width:940px;
   height:610px;
-  z-index:94;
+  z-index:1200;
   display:none;
   align-items:center;
   justify-content:center;

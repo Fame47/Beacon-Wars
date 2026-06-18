@@ -1,5 +1,5 @@
 /* =========================================================
-   BEACON WARS v50 CLEAN CODE MAP
+   BEACON WARS v51 CLEAN CODE MAP
    =========================================================
    1. CONFIG: board constants, art, units, tactics, battlefields
    2. SETUP UI: side, commander, tactic, battlefield cards
@@ -28,7 +28,9 @@ const onlineState={
   roomUnsub:null,
   moveSeq:0,
   firebaseError:null,
-  pendingCommit:false
+  pendingCommit:false,
+  lastCommitId:null,
+  lastRoomData:null
 };
 let showCenterDots=false, showAllEnemies=false;
 
@@ -312,69 +314,114 @@ function firebaseListenRoom(roomCode){
 }
 function handleRoomSnapshot(data){
   if(!onlineState.enabled) return;
+  onlineState.lastRoomData=data;
 
   if(data.moveSeq!=null) onlineState.moveSeq=data.moveSeq;
   if(data.hostColor) onlineState.hostColor=data.hostColor;
+
+  // Re-assert role from Firebase uid. This saves us if the page refreshed mid-room.
+  if(onlineState.uid){
+    if(data.hostUid===onlineState.uid) onlineState.role='host';
+    if(data.guestUid===onlineState.uid) onlineState.role='guest';
+  }
 
   if(onlineState.role==='host' && data.hostColor){
     onlineState.playerColor=data.hostColor;
     onlineState.opponentColor=data.guestColor || (data.hostColor===BLUE?RED:BLUE);
     setup.side=onlineState.playerColor;
   }
-  if(onlineState.role==='guest' && data.guestColor){
-    onlineState.playerColor=data.guestColor;
+  if(onlineState.role==='guest' && (data.guestColor || data.hostColor)){
+    const guestColor=data.guestColor || (data.hostColor===BLUE?RED:BLUE);
+    onlineState.playerColor=guestColor;
     onlineState.opponentColor=data.hostColor;
     setup.side=onlineState.playerColor;
   }
   if(data.firstAttackTeam) onlineState.firstAttackTeam=data.firstAttackTeam;
 
-  // Only turn-switch while the battle screen is active. Do not steal control during the local COMMIT step.
-  if(phase!=='player' && phase!=='waiting') return;
+  // Do not let Firebase steal control during the local COMMIT step.
+  if(phase==='commit') return;
   if(data.phase!=='battle') return;
 
-  const myTurn = data.turnRole===onlineState.role || data.turnTeam===playerTeam();
-  if(myTurn && phase==='waiting'){
-    phase='player';
-    selectedPiece=null; legal=[]; scanTargets=[]; scanMode=false; abilityMoveMode=false;
-    updateStatus(teamLabel(playerTeam())+' TURN','Opponent move received.','Your turn. Drag from a unit’s A/base to move.');
-    updateStartBtn();
-    renderBoard(); renderUnitList();
-    updateBoardLock();
-    log('Firebase turn passed to '+teamLabel(playerTeam())+'.');
-  } else if(!myTurn && phase==='player'){
-    phase='waiting';
-    updateStatus('ONLINE WAITING','Opponent turn.','Waiting for the opponent to make a move.');
-    updateStartBtn();
-    updateBoardLock();
+  const activeRole=data.activeRole || data.turnRole;
+  const activeTeam=data.activeTeam || data.turnTeam;
+  const myTurn = activeRole===onlineState.role || activeTeam===playerTeam();
+
+  if(myTurn){
+    if(phase==='waiting'){
+      phase='player';
+      selectedPiece=null; legal=[]; scanTargets=[]; scanMode=false; abilityMoveMode=false;
+      updateStatus(teamLabel(playerTeam())+' TURN','Opponent committed.','Your turn. Drag from a unit’s A/base to move.');
+      updateStartBtn();
+      renderBoard(); renderUnitList();
+      log('Firebase turn passed to '+teamLabel(playerTeam())+'.');
+    }
+  } else {
+    if(phase==='player'){
+      phase='waiting';
+      updateStatus('ONLINE WAITING','Opponent turn.','Waiting for the opponent to commit a move.');
+      updateStartBtn();
+    }
   }
+
+  // Fresh log when a new commit arrives.
+  if(data.lastCommitId && data.lastCommitId!==onlineState.lastCommitId){
+    onlineState.lastCommitId=data.lastCommitId;
+    if(data.lastCommitByRole!==onlineState.role){
+      log('Opponent commit received. Turn is now '+(myTurn?'yours.':'theirs.'));
+    }
+  }
+  updateBoardLock();
 }
 async function firebaseStartBattle(){
   if(!onlineState.enabled || !onlineState.roomCode) return;
   const ready=await initFirebase();
   if(!ready){ log('Firebase not ready: '+(onlineState.firebaseError||'unknown error')); return; }
-  const guestColor=onlineState.hostColor===BLUE?RED:BLUE;
+
+  const snap=await roomRef(onlineState.roomCode).get();
+  const current=snap.exists ? (snap.data()||{}) : {};
+  const hostColor=onlineState.hostColor || current.hostColor || BLUE;
+  const guestColor=current.guestColor || (hostColor===BLUE?RED:BLUE);
+
+  // Do not reset the room back to guest if a commit already happened.
+  if(current.phase==='battle' && (current.moveSeq||0)>0){
+    return;
+  }
+
   await roomRef(onlineState.roomCode).set({
     phase:'battle',
-    hostColor:onlineState.hostColor,
+    hostColor,
     guestColor,
     firstAttackTeam:guestColor,
-    turnRole:'guest',
-    turnTeam:guestColor,
+    turnRole:current.turnRole || 'guest',
+    activeRole:current.activeRole || 'guest',
+    turnTeam:current.turnTeam || guestColor,
+    activeTeam:current.activeTeam || guestColor,
+    moveSeq:current.moveSeq || 0,
     updatedAt:firebase.firestore.FieldValue.serverTimestamp()
   }, {merge:true});
 }
 async function firebaseSendTurn(){
   if(!onlineState.enabled || !onlineState.roomCode || onlineState.role==='local') return;
   const ready=await initFirebase();
-  if(!ready){ log('Firebase not ready: '+(onlineState.firebaseError||'unknown error')); return; }
+  if(!ready){ throw new Error(onlineState.firebaseError||'Firebase unavailable.'); }
+
   const nextRole=onlineState.role==='host'?'guest':'host';
   const nextTeam=onlineState.opponentColor || (playerTeam()===BLUE?RED:BLUE);
+  const commitId=(Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8)).toUpperCase();
+
   const payload={
     phase:'battle',
     turnRole:nextRole,
+    activeRole:nextRole,
     turnTeam:nextTeam,
+    activeTeam:nextTeam,
     moveSeq:firebase.firestore.FieldValue.increment(1),
+    lastCommitId:commitId,
+    lastCommitByRole:onlineState.role,
+    lastCommitByTeam:playerTeam(),
+    lastCommitByUid:onlineState.uid || null,
     lastMove:{
+      commitId,
       byRole:onlineState.role,
       byTeam:playerTeam(),
       toRole:nextRole,
@@ -383,14 +430,18 @@ async function firebaseSendTurn(){
     },
     updatedAt:firebase.firestore.FieldValue.serverTimestamp()
   };
+
   await roomRef(onlineState.roomCode).set(payload, {merge:true});
   await roomRef(onlineState.roomCode).collection('moves').add({
+    commitId,
     byRole:onlineState.role,
     byTeam:playerTeam(),
     nextRole,
     nextTeam,
     createdAt:firebase.firestore.FieldValue.serverTimestamp()
   });
+
+  onlineState.lastCommitId=commitId;
 }
 
 function updateBoardLock(){
@@ -409,11 +460,11 @@ async function commitOnlineMove(){
   if(!onlineState.enabled || phase!=='commit') return;
   onlineState.pendingCommit=false;
   phase='waiting';
-  updateStatus('ONLINE WAITING','Move committed.','Waiting for the opponent to respond.');
+  updateStatus('ONLINE WAITING','Move committed.','Turn sent through Firebase. Waiting for the opponent to respond.');
   updateStartBtn();
   try{
     await firebaseSendTurn();
-    log('Move committed to Firebase.');
+    log('Move committed to Firebase. Turn passed to opponent.');
   }catch(err){
     log('Firebase commit failed: '+(err.message||err));
     phase='commit';

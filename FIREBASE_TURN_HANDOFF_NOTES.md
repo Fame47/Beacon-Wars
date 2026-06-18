@@ -18,3 +18,14 @@ What is wired:
 
 Known current limitation:
 This is the turn handoff layer. It passes control between browsers, but full board-state synchronization is the next layer.
+
+
+# v51 Stronger Commit Lock
+
+Fixes from v50:
+- Board lock overlay now sits above unit hotspots, so the board is truly locked in WAITING and COMMIT.
+- Firebase uses both `turnRole` and `activeRole` plus `turnTeam` and `activeTeam`.
+- Commit writes `lastCommitId`, `lastCommitByRole`, and `moveSeq`.
+- Listener re-identifies host/guest by Firebase uid after refresh.
+- Start battle no longer resets turn back to guest after a commit has already happened.
+- Cache bust moved to `?v=51`.
