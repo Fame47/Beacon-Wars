@@ -108,3 +108,20 @@ Adds:
 - Does not reveal the unit name or ID.
 - Uses a generic marker over the destination cell, so hidden enemy pieces remain hidden as `?`.
 - Cache bust moved to `?v=57`.
+
+
+# v58 Authoritative Board Sync
+
+Fixes:
+- COMMIT now sends an authoritative board snapshot.
+- Opponent screen rebuilds its board from that snapshot, rotated into its own view.
+- Captured/removed pieces are removed on both screens, preventing ghost pieces.
+- Invisible pieces should no longer remain clickable/movable after being removed remotely.
+- Commander reveal from Tactical Warp / Emergency Shield syncs through the board snapshot.
+- Target Specialist now reveals itself when activating Scan.
+- Scan results and revealed/combat flags sync through the board snapshot.
+- Green last-move glow still works and stays generic.
+- Cache bust moved to `?v=58`.
+
+Known:
+- Full combat animation/replay is still basic, but the board state should now match after COMMIT.

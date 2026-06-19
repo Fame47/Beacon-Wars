@@ -1,5 +1,5 @@
 /* =========================================================
-   BEACON WARS v57 CLEAN CODE MAP
+   BEACON WARS v58 CLEAN CODE MAP
    =========================================================
    1. CONFIG: board constants, art, units, tactics, battlefields
    2. SETUP UI: side, commander, tactic, battlefield cards
@@ -377,8 +377,9 @@ function handleRoomSnapshot(data){
     const isOpponentCommit=data.lastCommitByUid!==onlineState.uid;
     onlineState.lastCommitId=data.lastCommitId;
     if(isOpponentCommit){
-      applyRemoteMovePayload(data.lastMove && data.lastMove.payload);
-      log('Opponent commit received. Turn is now '+(myTurn?'yours.':'theirs.'));
+      const applied=applyAuthoritativeBoardSnapshot(data.boardSnapshot, data.lastMove && data.lastMove.payload);
+      if(!applied) applyRemoteMovePayload(data.lastMove && data.lastMove.payload);
+      log('Opponent commit received. Board synced. Turn is now '+(myTurn?'yours.':'theirs.'));
     }
   }
   updateBoardLock();
@@ -415,6 +416,112 @@ function serializePlayerDeployment(){
   }
   return out;
 }
+
+function serializePieceForSync(p){
+  if(!p) return null;
+  return {
+    id:p.id,
+    name:p.name,
+    display:p.display,
+    rank:p.rank,
+    team:p.team,
+    movable:p.movable!==false,
+    mine:!!p.mine,
+    beacon:!!p.beacon,
+    engineer:!!p.engineer,
+    recon:!!p.recon,
+    specialist:!!p.specialist,
+    infiltrator:!!p.infiltrator,
+    commanderChoice:p.commanderChoice||null,
+    revealed:!!p.revealed,
+    scanned:!!p.scanned,
+    shielded:!!p.shielded
+  };
+}
+function serializeBoardSnapshot(){
+  const cells=[];
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      const p=board[r][c];
+      if(!p) continue;
+      cells.push({r,c,piece:serializePieceForSync(p)});
+    }
+  }
+  return {
+    perspectiveTeam:playerTeam(),
+    cells,
+    captured:{
+      blue:[...(captured.blue||[])],
+      red:[...(captured.red||[])]
+    },
+    commanderUse:{blue:commanderUse.blue, red:commanderUse.red},
+    shieldArmed:{blue:!!shieldArmed.blue, red:!!shieldArmed.red},
+    phase,
+    lastMoveGlow:lastMoveGlow ? {...lastMoveGlow} : null
+  };
+}
+function pieceFromSyncData(data,r,c){
+  if(!data) return null;
+  const def=unitDefs.find(d=>d.id===data.id) || {id:data.id, display:data.display, name:data.name, rank:data.rank, ability:''};
+  const p=unitCopy(def, data.team, r, c);
+  p.name=data.name || p.name;
+  p.display=data.display || p.display;
+  p.rank=data.rank;
+  p.movable=data.movable!==false;
+  p.mine=!!data.mine;
+  p.beacon=!!data.beacon;
+  p.engineer=!!data.engineer;
+  p.recon=!!data.recon;
+  p.specialist=!!data.specialist;
+  p.infiltrator=!!data.infiltrator;
+  p.commanderChoice=data.commanderChoice||null;
+  p.revealed=!!data.revealed;
+  p.scanned=!!data.scanned;
+  p.shielded=!!data.shielded;
+  p.profile=profileMap[p.id]||p.profile;
+  p.img=(p.team===RED?redImgMap:blueImgMap)[p.id] || p.img;
+  return p;
+}
+function applyAuthoritativeBoardSnapshot(snapshot, movePayload){
+  if(!snapshot || !Array.isArray(snapshot.cells)) return false;
+
+  // If the snapshot came from the other player's screen, rotate it into this player's view.
+  const shouldMirror = snapshot.perspectiveTeam && snapshot.perspectiveTeam!==playerTeam();
+
+  const nextBoard=Array.from({length:ROWS},()=>Array(COLS).fill(null));
+  snapshot.cells.forEach(entry=>{
+    if(!entry || !entry.piece) return;
+    let cell={r:entry.r,c:entry.c};
+    if(shouldMirror) cell=mirrorCell(cell);
+    if(!inBounds(cell.r,cell.c) || isBlocked(cell.r,cell.c)) return;
+    nextBoard[cell.r][cell.c]=pieceFromSyncData(entry.piece, cell.r, cell.c);
+  });
+
+  board=nextBoard;
+  captured={
+    blue:[...((snapshot.captured&&snapshot.captured.blue)||[])],
+    red:[...((snapshot.captured&&snapshot.captured.red)||[])]
+  };
+  commanderUse={
+    blue: snapshot.commanderUse && snapshot.commanderUse.blue!=null ? snapshot.commanderUse.blue : commanderUse.blue,
+    red: snapshot.commanderUse && snapshot.commanderUse.red!=null ? snapshot.commanderUse.red : commanderUse.red
+  };
+  shieldArmed={
+    blue: snapshot.shieldArmed && snapshot.shieldArmed.blue!=null ? !!snapshot.shieldArmed.blue : !!shieldArmed.blue,
+    red: snapshot.shieldArmed && snapshot.shieldArmed.red!=null ? !!snapshot.shieldArmed.red : !!shieldArmed.red
+  };
+
+  if(movePayload && movePayload.to){
+    lastMoveGlow = shouldMirror ? mirrorCell(movePayload.to) : {...movePayload.to};
+  } else if(snapshot.lastMoveGlow){
+    lastMoveGlow = shouldMirror ? mirrorCell(snapshot.lastMoveGlow) : {...snapshot.lastMoveGlow};
+  }
+
+  updateCaptured();
+  renderBoard();
+  return true;
+}
+
 function mirrorCell(cell){
   return {r:ROWS-1-cell.r, c:COLS-1-cell.c};
 }
@@ -601,6 +708,7 @@ async function firebaseSendTurn(){
     lastCommitByTeam:playerTeam(),
     lastCommitByUid:onlineState.uid || null,
     lastMoveText:publicCommitText(),
+    boardSnapshot:serializeBoardSnapshot(),
     lastMove:{
       commitId,
       byRole:onlineState.role,
@@ -1266,7 +1374,6 @@ function resolveCombat(a,d){
 function moveInto(p,r,c){board[p.r][p.c]=null; p.r=r; p.c=c; board[r][c]=p}
 function finishPlayerTurn(){
   selectedPiece=null; legal=[]; scanMode=false; abilityMoveMode=false; scanTargets=[]; pendingConfirm=null; hideConfirm(); renderBoard(); renderUnitList();
-  if(phase==='gameover') return;
   if(onlineState.enabled){
     phase='commit';
     onlineState.pendingCommit=true;
@@ -1275,6 +1382,7 @@ function finishPlayerTurn(){
     updateStartBtn();
     return;
   }
+  if(phase==='gameover') return;
   phase='ai'; updateStatus(teamLabel(enemyTeam())+' ACADEMY AI','Enemy turn.','Computer is making a move...'); updateStartBtn();
   setTimeout(aiTurn,450);
 }
@@ -1398,7 +1506,14 @@ function aiTurn(){
   if(phase!=='gameover'){phase='player'; updateStatus(teamLabel(playerTeam())+' TURN','Your turn.','Drag from a unit’s A/base to move. Click the A/base to use skills.'); updateStartBtn();}
   renderBoard(); renderUnitList(); updateConsole(selectedPiece);
 }
-function activateScan(piece){selectedPiece=piece; legal=[]; pendingConfirm=null; hideConfirm(); scanMode=true; scanTargets=getScanTargets(piece); renderBoard(); updateStatus('SCAN MODE','Choose a ? target.','Click a hidden enemy in 2-space range, then press TARGET CONFIRM.')}
+function activateScan(piece){
+  selectedPiece=piece;
+  if(piece && piece.team===playerTeam() && !piece.revealed){
+    piece.revealed=true;
+    log(piece.name+' revealed to activate Scan.');
+  }
+  legal=[]; pendingConfirm=null; hideConfirm(); scanMode=true; scanTargets=getScanTargets(piece); renderBoard(); updateStatus('SCAN MODE','Choose a ? target.','Click a hidden enemy in 2-space range, then press TARGET CONFIRM.');
+}
 function blocksScan(p,r,c){
   const dr=r-p.r, dc=c-p.c;
   const sr=Math.sign(dr), sc=Math.sign(dc);
@@ -1600,6 +1715,7 @@ function useCommanderTactic(piece){
   pendingConfirm=null; hideConfirm();
   if(setup.tactic==='tacticalWarp'){
     piece.revealed=true;
+    log(piece.name+' revealed to activate Tactical Warp.');
     selectedPiece=piece; legal=getTeleport(piece,3); abilityMoveMode=true; renderBoard(); updateConsole(piece); updateStatus('TACTICAL WARP','Choose a warp space.','Click a green warp circle, then press ENERGIZE to commit.');
   }
   else {
